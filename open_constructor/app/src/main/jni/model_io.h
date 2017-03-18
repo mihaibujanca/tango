@@ -1,5 +1,5 @@
-#ifndef OPEN_CONSTRUCTOR_MODEL_IO_H
-#define OPEN_CONSTRUCTOR_MODEL_IO_H
+#ifndef MODEL_IO_H
+#define MODEL_IO_H
 
 #include <glm/glm.hpp>
 #include <tango-gl/tango-gl.h>
@@ -14,45 +14,39 @@ struct SingleDynamicMesh {
     unsigned long size;
 };
 
-struct TextureToLoad {
-    int width;
-    int height;
-    unsigned char* data;
-};
-
 namespace mesh_builder {
 
 class ModelIO {
 public:
     ModelIO(std::string filename, bool writeAccess);
     ~ModelIO();
-    void setDataset(std::string path) { dataset = path; }
-    std::vector<TextureToLoad> readModel(int subdivision, std::vector<tango_gl::StaticMesh>& output);
-    void writeModel(std::vector<SingleDynamicMesh*> model);
+    std::map<int, std::string> ReadModel(int subdivision, std::vector<tango_gl::StaticMesh>& output);
+    void WriteModel(std::vector<SingleDynamicMesh*> model);
 
     enum TYPE{OBJ, PLY};
 
 private:
-    glm::ivec3 decodeColor(unsigned int c);
-    void parseOBJ(std::vector<tango_gl::StaticMesh> &output);
-    void parsePLYFaces(int subdivision, std::vector<tango_gl::StaticMesh> &output);
-    std::vector<TextureToLoad> readHeader();
-    void readPLYVertices();
-    unsigned int scanDec(char *line, int offset);
-    bool startsWith(std::string s, std::string e);
-    void writeHeader(std::vector<SingleDynamicMesh*> model);
-    void writePointCloud(SingleDynamicMesh *mesh, int size);
-    void writeFaces(SingleDynamicMesh *mesh, int offset);
-    TextureToLoad readPNG(std::string file);
+    glm::ivec3 DecodeColor(unsigned int c);
+    void ParseOBJ(int subdivision, std::vector<tango_gl::StaticMesh> &output);
+    void ParsePLYFaces(int subdivision, std::vector<tango_gl::StaticMesh> &output);
+    void ReadHeader();
+    void ReadPLYVertices();
+    unsigned int ScanDec(char *line, int offset);
+    bool StartsWith(std::string s, std::string e);
+    void WriteHeader(std::vector<SingleDynamicMesh*> model);
+    void WritePointCloud(SingleDynamicMesh *mesh, int size);
+    void WriteFaces(SingleDynamicMesh *mesh, int offset);
 
     TYPE type;
-    std::string dataset;
     std::string path;
     bool writeMode;
     unsigned int vertexCount;
     unsigned int faceCount;
     FILE* file;
     tango_gl::StaticMesh data;
+    std::map<std::string, int> fileToIndex;
+    std::map<int, std::string> indexToFile;
+    std::map<std::string, std::string> keyToFile;
 };
 } // namespace mesh_builder
 

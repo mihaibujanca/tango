@@ -15,6 +15,7 @@
 #include <tango_support_api.h>
 
 #include "scene.h"
+#include "texture_processor.h"
 
 namespace mesh_builder {
 
@@ -54,7 +55,7 @@ namespace mesh_builder {
         void OnToggleButtonClicked(bool t3dr_is_running);
         void OnClearButtonClicked();
         void Load(std::string filename);
-        void Save(std::string filename);
+        void Save(std::string filename, std::string dataset);
         float CenterOfStaticModel(bool horizontal);
         bool IsPhotoFinished() { return photoFinished; }
         void SetView(float p, float y, float mx, float my, bool g) { pitch = p; yaw = y; gyro = g;
@@ -68,33 +69,36 @@ namespace mesh_builder {
         void TangoConnect();
         void TangoDisconnect();
         void DeleteResources();
-        void MeshUpdate();
-        void SaveFrame();
-        void WritePNG(const char* filename, int width, int height, unsigned char *buffer);
+        void MeshUpdate(Tango3DR_ImageBuffer t3dr_image, Tango3DR_GridIndexArray *t3dr_updated);
 
-        std::string dataset_;
         bool t3dr_is_running_;
-        Tango3DR_GridIndexArray *t3dr_updated;
         Tango3DR_Context t3dr_context_;
-        Tango3DR_Context t3dr_context_temp;
         Tango3DR_CameraCalibration t3dr_intrinsics_;
         Tango3DR_CameraCalibration t3dr_intrinsics_depth;
-        Tango3DR_ImageBuffer t3dr_image;
         glm::mat4 image_matrix;
         glm::quat image_rotation;
         std::mutex binder_mutex_;
         std::mutex render_mutex_;
+
+        bool point_cloud_available_;
+        TangoSupportPointCloudManager* point_cloud_manager_;
+        TangoPointCloud* front_cloud_;
+        glm::mat4 point_cloud_matrix_;
+
         Scene main_scene_;
         TangoConfig tango_config_;
+        TextureProcessor* textureProcessor;
         std::unordered_map<GridIndex, SingleDynamicMesh*, GridIndexHasher> meshes_;
-        std::unordered_map<GridIndex, std::vector<SingleDynamicMesh*>, GridIndexHasher> polygonUsage;
-        bool hasNewFrame;
+
+        std::string dataset_;
+        std::vector<Tango3DR_Pose> poses_;
+        std::vector<long> timestamps_;
+
         bool gyro;
         bool landscape;
         bool photoFinished;
         bool photoMode;
         bool textured;
-        int textureId;
         float scale;
         float movex;
         float movey;

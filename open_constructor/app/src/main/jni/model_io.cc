@@ -2,12 +2,6 @@
 #include "model_io.h"
 #include <sstream>
 
-FILE* temp;
-void png_read_file(png_structp, png_bytep data, png_size_t length)
-{
-    fread(data, length, 1, temp);
-}
-
 namespace mesh_builder {
 
     ModelIO::ModelIO(std::string filename, bool writeAccess) {
@@ -34,24 +28,23 @@ namespace mesh_builder {
     }
 
     ModelIO::~ModelIO() {
-        if (type != ModelIO::OBJ)
-            fclose(file);
+        fclose(file);
     }
 
-    std::vector<TextureToLoad> ModelIO::readModel(int subdivision, std::vector<tango_gl::StaticMesh>& output) {
+    std::map<int, std::string> ModelIO::ReadModel(int subdivision, std::vector<tango_gl::StaticMesh>& output) {
         assert(!writeMode);
-        std::vector<TextureToLoad> textures = readHeader();
+        ReadHeader();
         if (type == PLY) {
-            readPLYVertices();
-            parsePLYFaces(subdivision, output);
+            ReadPLYVertices();
+            ParsePLYFaces(subdivision, output);
         } else if (type == OBJ) {
-            parseOBJ(output);
+            ParseOBJ(subdivision, output);
         } else
             assert(false);
-        return textures;
+        return indexToFile;
     }
 
-    void ModelIO::writeModel(std::vector<SingleDynamicMesh*> model) {
+    void ModelIO::WriteModel(std::vector<SingleDynamicMesh*> model) {
         assert(writeMode);
         //count vertices and faces
         faceCount = 0;
@@ -72,65 +65,123 @@ namespace mesh_builder {
         }
         //write
         if ((type == PLY) || (type == OBJ)) {
-            writeHeader(model);
+            WriteHeader(model);
             for (unsigned int i = 0; i < model.size(); i++)
-                writePointCloud(model[i], vectorSize[i]);
+                WritePointCloud(model[i], vectorSize[i]);
             int offset = 0;
             if (type == OBJ)
                 offset++;
             int texture = -1;
             for (unsigned int i = 0; i < model.size(); i++) {
+                if (model[i]->mesh.indices.empty()) {
+                    offset += vectorSize[i];
+                    continue;
+                }
                 if (type == OBJ) {
                     if (texture != model[i]->mesh.texture) {
                         texture = model[i]->mesh.texture;
                         fprintf(file, "usemtl %d\n", texture);
                     }
                 }
-                writeFaces(model[i], offset);
+                WriteFaces(model[i], offset);
                 offset += vectorSize[i];
             }
         } else
             assert(false);
     }
 
-    void ModelIO::parseOBJ(std::vector<tango_gl::StaticMesh> &output) {
+    glm::ivec3 ModelIO::DecodeColor(unsigned int c) {
+        glm::ivec3 output;
+        output.r = (c & 0x000000FF);
+        output.g = (c & 0x0000FF00) >> 8;
+        output.b = (c & 0x00FF0000) >> 16;
+        return output;
+    }
+
+    void ModelIO::ParseOBJ(int subdivision, std::vector<tango_gl::StaticMesh> &output) {
         char buffer[1024];
         unsigned long meshIndex = 0;
+        int textureIndex = 0;
         glm::vec3 v;
+        glm::vec3 n;
         glm::vec2 t;
         std::vector<glm::vec3> vertices;
+        std::vector<glm::vec3> normals;
         std::vector<glm::vec2> uvs;
-        unsigned int a, aa, b, bb, c, cc;
+        bool hasNormals = false;
+        bool hasCoords = false;
+        unsigned int va, vna, vta, vb, vnb, vtb, vc, vnc, vtc;
         while (true) {
             if (!fgets(buffer, 1024, file))
                 break;
             if (buffer[0] == 'u') {
+                char key[1024];
+                sscanf(buffer, "usemtl %s", key);
+                std::string file = keyToFile[std::string(key)];
+                if (fileToIndex.find(file) == fileToIndex.end()) {
+                    textureIndex = (int) fileToIndex.size();
+                    fileToIndex[file] = textureIndex;
+                    indexToFile[textureIndex] = file;
+                } else
+                    textureIndex = fileToIndex[file];
+                meshIndex = output.size();
                 output.push_back(tango_gl::StaticMesh());
-                meshIndex = output.size() - 1;
                 output[meshIndex].render_mode = GL_TRIANGLES;
-                output[meshIndex].texture = (int32_t) meshIndex;
+                output[meshIndex].texture = textureIndex;
             } else if ((buffer[0] == 'v') && (buffer[1] == ' ')) {
                 sscanf(buffer, "v %f %f %f", &v.x, &v.y, &v.z);
                 vertices.push_back(v);
             } else if ((buffer[0] == 'v') && (buffer[1] == 't')) {
                 sscanf(buffer, "vt %f %f", &t.x, &t.y);
                 uvs.push_back(t);
+                hasCoords = true;
+            } else if ((buffer[0] == 'v') && (buffer[1] == 'n')) {
+                sscanf(buffer, "vn %f %f %f", &n.x, &n.y, &n.z);
+                normals.push_back(n);
+                hasNormals = true;
             } else if ((buffer[0] == 'f') && (buffer[1] == ' ')) {
-                sscanf(buffer, "f %d/%d %d/%d %d/%d", &a, &aa, &b, &bb, &c, &cc);
+                va = 0;
+                vb = 0;
+                vc = 0;
+                if (!hasCoords && !hasNormals)
+                    sscanf(buffer, "f %d %d %d", &va, &vb, &vc);
+                else if (hasCoords && !hasNormals)
+                    sscanf(buffer, "f %d/%d %d/%d %d/%d", &va, &vta, &vb, &vtb, &vc, &vtc);
+                else if (hasCoords && hasNormals)
+                    sscanf(buffer, "f %d/%d/%d %d/%d/%d %d/%d/%d",
+                           &va, &vta, &vna, &vb, &vtb, &vnb, &vc, &vtc, &vnc);
+                else if (!hasCoords && hasNormals)
+                    sscanf(buffer, "f %d//%d %d//%d %d//%d", &va, &vna, &vb, &vnb, &vc, &vnc);
                 //broken topology ignored
-                if ((a == b) || (a == c) || (b == c))
+                if ((va == vb) || (va == vc) || (vb == vc))
                     continue;
-                output[meshIndex].vertices.push_back(vertices[a - 1]);
-                output[meshIndex].uv.push_back(uvs[aa - 1]);
-                output[meshIndex].vertices.push_back(vertices[b - 1]);
-                output[meshIndex].uv.push_back(uvs[bb - 1]);
-                output[meshIndex].vertices.push_back(vertices[c - 1]);
-                output[meshIndex].uv.push_back(uvs[cc - 1]);
+                //incomplete line ignored
+                if ((va == 0) || (vb == 0) || (vc == 0))
+                    continue;
+                output[meshIndex].vertices.push_back(vertices[va - 1]);
+                output[meshIndex].vertices.push_back(vertices[vb - 1]);
+                output[meshIndex].vertices.push_back(vertices[vc - 1]);
+                if (hasCoords) {
+                    output[meshIndex].uv.push_back(uvs[vta - 1]);
+                    output[meshIndex].uv.push_back(uvs[vtb - 1]);
+                    output[meshIndex].uv.push_back(uvs[vtc - 1]);
+                }
+                if (hasNormals) {
+                    output[meshIndex].normals.push_back(normals[vna - 1]);
+                    output[meshIndex].normals.push_back(normals[vnb - 1]);
+                    output[meshIndex].normals.push_back(normals[vnc - 1]);
+                }
+                if (output[meshIndex].vertices.size() >= subdivision * 3) {
+                    meshIndex = output.size();
+                    output.push_back(tango_gl::StaticMesh());
+                    output[meshIndex].render_mode = GL_TRIANGLES;
+                    output[meshIndex].texture = textureIndex;
+                }
             }
         }
     }
 
-    void ModelIO::parsePLYFaces(int subdivision, std::vector<tango_gl::StaticMesh> &output) {
+    void ModelIO::ParsePLYFaces(int subdivision, std::vector<tango_gl::StaticMesh> &output) {
         unsigned int offset = 0;
         int parts = faceCount / subdivision;
         if(faceCount % subdivision > 0)
@@ -168,7 +219,7 @@ namespace mesh_builder {
         }
     }
 
-    void ModelIO::readPLYVertices() {
+    void ModelIO::ReadPLYVertices() {
         assert(!writeMode);
         unsigned int a, b, c;
         glm::vec3 v;
@@ -180,18 +231,17 @@ namespace mesh_builder {
         }
     }
 
-    std::vector<TextureToLoad> ModelIO::readHeader() {
-        std::vector<TextureToLoad> output;
+    void ModelIO::ReadHeader() {
         char buffer[1024];
         if (type == PLY) {
             while (true) {
                 if (!fgets(buffer, 1024, file))
                     break;
-                if (startsWith(buffer, "element vertex"))
-                    vertexCount = scanDec(buffer, 15);
-                else if (startsWith(buffer, "element face"))
-                    faceCount = scanDec(buffer, 13);
-                else if (startsWith(buffer, "end_header"))
+                if (StartsWith(buffer, "element vertex"))
+                    vertexCount = ScanDec(buffer, 15);
+                else if (StartsWith(buffer, "element face"))
+                    faceCount = ScanDec(buffer, 13);
+                else if (StartsWith(buffer, "end_header"))
                     break;
             }
         } else if (type == OBJ) {
@@ -199,42 +249,37 @@ namespace mesh_builder {
             while (true) {
                 if (!fgets(buffer, 1024, file))
                     break;
-                if (startsWith(buffer, "mtllib")) {
+                if (StartsWith(buffer, "mtllib")) {
                     sscanf(buffer, "mtllib %s", mtlFile);
                     break;
                 }
             }
-            unsigned long index = 0;
+            unsigned int index = 0;
             for (unsigned long i = 0; i < path.size(); i++) {
                 if (path[i] == '/')
-                    index = i;
+                    index = (unsigned int) i;
             }
+            char key[1024];
+            char pngFile[1024];
             std::string data = path.substr(0, index + 1);
             FILE* mtl = fopen((data + mtlFile).c_str(), "r");
             while (true) {
-                char pngFile[1024];
                 if (!fgets(buffer, 1024, mtl))
                     break;
-                if (startsWith(buffer, "map_Kd")) {
+                if (StartsWith(buffer, "newmtl")) {
+                    sscanf(buffer, "newmtl %s", key);
+                }
+                if (StartsWith(buffer, "map_Kd")) {
                     sscanf(buffer, "map_Kd %s", pngFile);
-                    output.push_back(readPNG(data + pngFile));
+                    keyToFile[std::string(key)] = data + pngFile;
                 }
             }
             fclose(mtl);
         } else
             assert(false);
-        return output;
     }
 
-    glm::ivec3 ModelIO::decodeColor(unsigned int c) {
-        glm::ivec3 output;
-        output.r = (c & 0x000000FF);
-        output.g = (c & 0x0000FF00) >> 8;
-        output.b = (c & 0x00FF0000) >> 16;
-        return output;
-    }
-
-    unsigned int ModelIO::scanDec(char *line, int offset) {
+    unsigned int ModelIO::ScanDec(char *line, int offset) {
         unsigned int number = 0;
         for (int i = offset; i < 1024; i++) {
             char c = line[i];
@@ -246,14 +291,14 @@ namespace mesh_builder {
         return number;
     }
 
-    bool ModelIO::startsWith(std::string s, std::string e) {
+    bool ModelIO::StartsWith(std::string s, std::string e) {
         if (s.size() >= e.size())
         if (s.substr(0, e.size()).compare(e) == 0)
             return true;
         return false;
     }
 
-    void ModelIO::writeHeader(std::vector<SingleDynamicMesh*> model) {
+    void ModelIO::WriteHeader(std::vector<SingleDynamicMesh*> model) {
         if (type == PLY) {
             fprintf(file, "ply\nformat ascii 1.0\ncomment ---\n");
             fprintf(file, "element vertex %d\n", vertexCount);
@@ -276,26 +321,14 @@ namespace mesh_builder {
             std::string shortBase = base.substr(index + 1, base.length());
             fprintf(file, "mtllib %s.mtl\n", shortBase.c_str());
             FILE* mtl = fopen((base + ".mtl").c_str(), "w");
-            int texture = -1;
+            std::map<int, bool> stored;
             for (unsigned int i = 0; i < model.size(); i++) {
-                if (texture != model[i]->mesh.texture) {
-                    texture = model[i]->mesh.texture;
-                } else
+                if (model[i]->mesh.indices.empty())
                     continue;
-                std::ostringstream srcPath;
-                srcPath << dataset.c_str();
-                srcPath << "/frame_";
-                srcPath << texture;
-                srcPath << ".png";
-                std::ostringstream dstPath;
-                dstPath << base.c_str();
-                dstPath << "_";
-                dstPath << texture;
-                dstPath << ".png";
-                LOGI("Moving %s to %s", srcPath.str().c_str(), dstPath.str().c_str());
-                rename(srcPath.str().c_str(), dstPath.str().c_str());
+                if (stored.find(model[i]->mesh.texture) != stored.end())
+                    continue;
 
-                fprintf(mtl, "newmtl %d\n", texture);
+                fprintf(mtl, "newmtl %d\n", model[i]->mesh.texture);
                 fprintf(mtl, "Ns 96.078431\n");
                 fprintf(mtl, "Ka 1.000000 1.000000 1.000000\n");
                 fprintf(mtl, "Kd 0.640000 0.640000 0.640000\n");
@@ -304,20 +337,21 @@ namespace mesh_builder {
                 fprintf(mtl, "Ni 1.000000\n");
                 fprintf(mtl, "d 1.000000\n");
                 fprintf(mtl, "illum 2\n");
-                fprintf(mtl, "map_Kd %s_%d.png\n\n", shortBase.c_str(), texture);
+                fprintf(mtl, "map_Kd %s_%d.png\n\n", shortBase.c_str(), model[i]->mesh.texture);
+                stored[model[i]->mesh.texture] = true;
             }
             fclose(mtl);
         }
     }
 
-    void ModelIO::writePointCloud(SingleDynamicMesh *mesh, int size) {
+    void ModelIO::WritePointCloud(SingleDynamicMesh *mesh, int size) {
         glm::vec3 v;
         glm::vec2 t;
         glm::ivec3 c;
         for(unsigned int j = 0; j < size; j++) {
             v = mesh->mesh.vertices[j];
             if (type == PLY) {
-                c = decodeColor(mesh->mesh.colors[j]);
+                c = DecodeColor(mesh->mesh.colors[j]);
                 fprintf(file, "%f %f %f %d %d %d\n", -v.x, v.z, v.y, c.r, c.g, c.b);
             } else if (type == OBJ) {
                 t = mesh->mesh.uv[j];
@@ -327,7 +361,7 @@ namespace mesh_builder {
         }
     }
 
-    void ModelIO::writeFaces(SingleDynamicMesh *mesh, int offset) {
+    void ModelIO::WriteFaces(SingleDynamicMesh *mesh, int offset) {
         glm::ivec3 i;
         for (unsigned int j = 0; j < mesh->size; j+=3) {
             i.x = mesh->mesh.indices[j + 0] + offset;
@@ -338,36 +372,5 @@ namespace mesh_builder {
             else if (type == OBJ)
                 fprintf(file, "f %d/%d %d/%d %d/%d\n", i.x, i.x, i.y, i.y, i.z, i.z);
         }
-    }
-
-    TextureToLoad ModelIO::readPNG(std::string file)
-    {
-        temp = fopen(file.c_str(), "r");
-        TextureToLoad texture;
-        unsigned int sig_read = 0;
-
-        /// init PNG library
-        png_structp png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-        png_infop info_ptr = png_create_info_struct(png_ptr);
-        setjmp(png_jmpbuf(png_ptr));
-        png_set_read_fn(png_ptr, NULL, png_read_file);
-        png_set_sig_bytes(png_ptr, sig_read);
-        png_read_png(png_ptr, info_ptr, PNG_TRANSFORM_STRIP_16, NULL);
-        int bit_depth, color_type, interlace_type;
-        png_uint_32 width, height;
-        png_get_IHDR(png_ptr, info_ptr, &width, &height, &bit_depth, &color_type, &interlace_type, NULL, NULL);
-
-        /// load PNG
-        png_size_t row_bytes = png_get_rowbytes(png_ptr, info_ptr);
-        texture.data = new unsigned char[row_bytes * height];
-        png_bytepp row_pointers = png_get_rows(png_ptr, info_ptr);
-        for (unsigned int i = 0; i < height; i++)
-            memcpy(texture.data+(row_bytes * i), row_pointers[i], row_bytes);
-
-        png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
-        fclose(temp);
-        texture.width = (int) width;
-        texture.height = (int) height;
-        return texture;
     }
 } // namespace mesh_builder

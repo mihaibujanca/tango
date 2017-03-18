@@ -76,12 +76,11 @@ public class OpenConstructorActivity extends AbstractActivity implements View.On
       public void onServiceConnected(ComponentName name, IBinder srv) {
         double res      = mRes * 0.01;
         double dmin     = 0.6f;
-        double dmax     = mRes;
-        int noise       = isNoiseFilterOn() ? 9 : 1;
+        double dmax     = mRes * 1.5;
+        int noise       = isNoiseFilterOn() ? 9 : 0;
         boolean land    = !isPortrait(OpenConstructorActivity.this);
         boolean photo   = isPhotoModeOn();
         boolean txt     = isTexturingOn();
-        String tmp      = getTempPath().toString();
 
         if (android.os.Build.DEVICE.toLowerCase().startsWith("yellowstone"))
           land = !land;
@@ -94,8 +93,9 @@ public class OpenConstructorActivity extends AbstractActivity implements View.On
         }
 
         m3drRunning = !photo;
+        String t = getTempPath().getAbsolutePath();
         TangoJNINative.onCreate(OpenConstructorActivity.this);
-        TangoJNINative.onTangoServiceConnected(srv, res, dmin, dmax, noise, land, photo, txt, tmp);
+        TangoJNINative.onTangoServiceConnected(srv, res, dmin, dmax, noise, land, photo, txt, t);
         TangoJNINative.onToggleButtonClicked(m3drRunning);
         TangoJNINative.setView(0, 0, 0, 0, true);
         OpenConstructorActivity.this.runOnUiThread(new Runnable()
@@ -328,14 +328,14 @@ public class OpenConstructorActivity extends AbstractActivity implements View.On
     text += getString(R.string.distance) + " ";
     if (isPhotoModeOn()) {
       if(mRes > 0)
-        text += "5 m, ";
+        text += "5.0 m, ";
       else if(mRes == 0)
-        text += "2 m, ";
+        text += "2.0 m, ";
     } else {
       if(mRes > 0)
-        text += mRes + " m, ";
+        text += (1.5f * mRes) + " m, ";
       else if(mRes == 0)
-        text += "1 m, ";
+        text += "1.0 m, ";
     }
     //3d resolution
     text += getString(R.string.resolution) + " ";
@@ -348,7 +348,7 @@ public class OpenConstructorActivity extends AbstractActivity implements View.On
     if ((mRes <= 0) || ((mRes == 1) && isPhotoModeOn())) {
       text += getString(R.string.extreme);
       mResText.setTextColor(Color.RED);
-    } else if (freeMBs < 250)
+    } else if (freeMBs < 400)
       mResText.setTextColor(Color.RED);
     else
       mResText.setTextColor(Color.WHITE);
@@ -356,7 +356,7 @@ public class OpenConstructorActivity extends AbstractActivity implements View.On
   }
 
   @Override
-  public synchronized void onBackPressed()
+  public void onBackPressed()
   {
     System.exit(0);
   }
@@ -444,16 +444,22 @@ public class OpenConstructorActivity extends AbstractActivity implements View.On
               }
             }
             //save
+            String dataset = "";
             File file2save = new File(getPath(), input.getText().toString() + FILE_EXT[type]);
             final String filename = file2save.getAbsolutePath();
             if (isTexturingOn()) {
               long timestamp = System.currentTimeMillis();
               File obj = new File(getPath(), timestamp + FILE_EXT[type]);
-              TangoJNINative.save(obj.getAbsolutePath());
+              for (File f : getTempPath().listFiles())
+                if (f.isDirectory()) {
+                  dataset = f.toString();
+                  break;
+                }
+              TangoJNINative.save(obj.getAbsolutePath(), dataset);
               if (obj.renameTo(file2save))
                 Log.d(TAG, "Obj file " + file2save.toString() + " saved.");
             } else
-              TangoJNINative.save(filename);
+              TangoJNINative.save(filename, dataset);
             //open???
             OpenConstructorActivity.this.runOnUiThread(new Runnable()
             {
@@ -467,6 +473,26 @@ public class OpenConstructorActivity extends AbstractActivity implements View.On
                   @Override
                   public void onClick(DialogInterface dialog, int which) {
                     setViewerMode();
+                    if (isTexturingOn()) {
+                      mProgress.setVisibility(View.VISIBLE);
+                      new Thread(new Runnable()
+                      {
+                        @Override
+                        public void run()
+                        {
+                          TangoJNINative.onClearButtonClicked();
+                          TangoJNINative.load(filename);
+                          OpenConstructorActivity.this.runOnUiThread(new Runnable()
+                          {
+                            @Override
+                            public void run()
+                            {
+                              mProgress.setVisibility(View.GONE);
+                            }
+                          });
+                        }
+                      }).start();
+                    }
                     dialog.cancel();
                   }
                 });
